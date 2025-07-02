@@ -1,8 +1,10 @@
 import OpenAI from "openai";
 import events from "node:events";
 import { ChatCompletionMessageParam } from "openai/resources/index.mjs";
-import { Tool, Context, toolModelSchema } from "./tool";
+import { Tool, Context, toolModelSchema, defineTool } from "./tool";
 import { z } from "zod";
+import zodToJsonSchema from "zod-to-json-schema";
+import { jsonSafeParse } from "./utils";
 
 export type LLMConfig = {
   temperature?: number;
@@ -15,7 +17,7 @@ export type LLMConfig = {
 export type PersistenceParams = {
   messages: ChatCompletionMessageParam[];
   step: number;
-  prompt: string;
+  prompt: string | Record<string, unknown>;
   ctx?: Context;
   llmConfig?: LLMConfig;
 };
@@ -52,12 +54,15 @@ export type ExecutionStats = {
   status?: "running" | "completed" | "failed" | "aborted";
 };
 
-export type OpenAICompatibleAgentArgs = {
-  createLLM: () => OpenAI;
-  model: string;
-  children: Tool<any, any>[];
+export type AgentArgs = {
+  createLLM: () => { llm: OpenAI, model: string, format?: "json_object" | "text" };
+  name: string;
+  instructions: string;
+  description?: string;
+  tools: Tool<any, any>[];
+  outputSchema?: z.ZodObject<any>;
+  inputSchema?: z.ZodObject<any>;
   maxTurns?: number;
-  systemPrompt?: string;
   verbose?: boolean;
   enableMessageCompression?: boolean;
   compression?: CompressionMessagesFunction;
@@ -67,7 +72,7 @@ export type OpenAICompatibleAgentArgs = {
 };
 
 export type AgentExecutorArgs = {
-  prompt: string;
+  prompt: string | Record<string, unknown>;
   messages?: ChatCompletionMessageParam[];
   step?: number;
   ctx?: Context;
@@ -77,19 +82,22 @@ export type AgentExecutorArgs = {
 
 const MAX_AGENT_STEPS = 888;
 
-export function createOpenAICompatibleAgent({
+export function createAgent({
   createLLM,
-  model,
-  children,
+  tools,
+  name,
+  instructions,
+  description,
+  outputSchema,
+  inputSchema,
   maxTurns = 12,
-  systemPrompt = "",
   verbose = false,
   enableMessageCompression = true,
   compression,
   maxMessageHistory = 50,
   defaultLLMConfig = {},
   persistentHistory,
-}: OpenAICompatibleAgentArgs) {
+}: AgentArgs) {
 
   if (maxTurns > MAX_AGENT_STEPS) {
     maxTurns = MAX_AGENT_STEPS
@@ -125,16 +133,16 @@ export function createOpenAICompatibleAgent({
   };
 
   const validateTools = () => {
-    if (!children.every(v => !!v.name)) {
+    if (!tools.every(v => !!v.name)) {
       throw "Tools must have a name"
     }
 
-    const names = new Set(children.map(v => v.name))
-    if (names.size !== children.length) {
-      throw `Duplicate name in ${children.map(v => v.name).join(",")}`
+    const names = new Set(tools.map(v => v.name))
+    if (names.size !== tools.length) {
+      throw `Duplicate name in ${tools.map(v => v.name).join(",")}`
     }
 
-    if (!children.every(v => typeof v.handler === "function")) {
+    if (!tools.every(v => typeof v.handler === "function")) {
       throw `Tools must have a handler function`
     }
 
@@ -142,7 +150,7 @@ export function createOpenAICompatibleAgent({
 
   validateTools();
 
-  const llm = createLLM();
+  const { llm, model, format = "text" } = createLLM();
 
   const compressMessages = (messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] => {
     if (!enableMessageCompression || messages.length <= maxMessageHistory) {
@@ -201,7 +209,7 @@ export function createOpenAICompatibleAgent({
     signal?: AbortSignal
   ) => {
     const name = toolCall.function.name;
-    const tool = children.find(v => v.name === name);
+    const tool = tools.find(v => v.name === name);
 
     if (!tool) {
       warn(`[AgentExecutor] 🚫 Error: LLM requested unknown tool: ${name}`);
@@ -267,7 +275,7 @@ export function createOpenAICompatibleAgent({
     }
   };
 
-  const execute = async ({
+  const run = async ({
     prompt,
     messages = [],
     step = 0,
@@ -298,9 +306,20 @@ export function createOpenAICompatibleAgent({
       }
 
       if (messages.length === 0) {
+        const systemMessage = [
+          instructions,
+          description ?? "",
+          outputSchema ?
+            `Your final response MUST be a JSON object that strictly adheres to the following schema.` : "",
+          outputSchema ?
+            `You should only make tool calls if necessary to gather the information required to construct this JSON object.` : "",
+          outputSchema ?
+            `final output json schema is: \n\`\`\`json${JSON.stringify(zodToJsonSchema(outputSchema, {}), null, 2)}\`\`\`` : ""]
+
+        const userMessage = typeof prompt === "string" ? prompt : "```json" + JSON.stringify(prompt, null, 2) + "```"
         messages = [
-          { role: "system", content: `You are general AI agent.\n${systemPrompt ?? ""}` },
-          { role: "user", content: prompt }
+          { role: "system", content: systemMessage.filter(v => !!v.length).join("\n\n") },
+          { role: "user", content: userMessage }
         ]
       } else {
         const rawMessagesLength = messages.length
@@ -335,8 +354,9 @@ export function createOpenAICompatibleAgent({
           ...mergedLLMConfig,
           model,
           messages: messages,
-          tools: children.map(v => toolModelSchema(v)),
+          tools: tools.map(v => toolModelSchema(v)),
           tool_choice: "auto",
+          response_format: { type: format }
         });
       } catch (llmError) {
         error(`[AgentExecutor] ❌ Step ${step}: LLM call failed:`, llmError);
@@ -386,11 +406,29 @@ export function createOpenAICompatibleAgent({
       const toolCalls = responseMessage.tool_calls;
       const content = responseMessage.content;
 
-      //Completed
       if (content) {
         log(`[AgentExecutor] ✅ Step ${step}: LLM returned final content. Task completed.`);
         const finalDuration = Date.now() - stats.duration;
         updateStats({ duration: finalDuration, status: 'completed' });
+        if (outputSchema) {
+          try {
+            const data = jsonSafeParse(content);
+            if (!data) {
+              error(`[AgentExecutor] ❌ Step ${step}: Final output is not a valid JSON object:`, content)
+              return
+            }
+            const validated = outputSchema.safeParse(data);
+            if (!validated.success) {
+              error(`[AgentExecutor] ❌ Step ${step}: Final output does not match schema:, validated.error`)
+              return
+            }
+            event.emit(AgentEvent.Completed, { content: validated.data, stats: { ...stats } });
+            return validated.data
+          } catch (e) {
+            error(`[AgentExecutor] ❌ Step ${step}: Final output extraction failed:`, content)
+            return
+          }
+        }
         event.emit(AgentEvent.Completed, { content, stats: { ...stats } });
         return content;
       }
@@ -422,11 +460,11 @@ export function createOpenAICompatibleAgent({
               llmConfig,
             });
           } catch (persistError) {
-            warn(`[AgentExecutor] ⚠️ Failed to persist messages after tool calls:`, persistError);
+            warn(`[AgentExecutor] ⚠️ Failed to persist messages after tool calls: `, persistError);
           }
         }
 
-        return await execute({
+        return await run({
           prompt,
           messages,
           step: step + 1,
@@ -451,16 +489,31 @@ export function createOpenAICompatibleAgent({
   return {
     event,
     llm,
-    execute,
+    run,
     addTool: (tool: Tool<z.ZodObject<any>, z.ZodTypeAny>) => {
-      children.push(tool);
+      tools.push(tool);
       validateTools();
     },
     removeTool: (name: string) => {
-      children = children.filter(t => t.name !== name);
+      tools = tools.filter(t => t.name !== name);
     },
-    getTools: () => [...children],
+    getTools: () => [...tools],
     getStats: () => stats,
+    asTool: () => {
+      return defineTool({
+        name,
+        description: instructions + (description ?? ""),
+        validators: {
+          args: inputSchema ?? z.object({ prompt: z.string() }),
+          return: outputSchema ?? z.object({ content: z.string() })
+        },
+        handler: async (data, ctx) =>
+          await run({
+            prompt: data,
+            ctx
+          })
+      })
+    },
     on: (eventName: AgentEvent, listener: (...args: any[]) => void) => {
       event.on(eventName, listener);
     },
@@ -479,10 +532,10 @@ export type RecoverAgentArgs = {
 };
 
 export function recoverOpenAICompatibleAgent(
-  agentArgs: OpenAICompatibleAgentArgs,
+  agentArgs: AgentArgs,
   recoveryData: RecoverAgentArgs
 ) {
-  const agent = createOpenAICompatibleAgent(agentArgs);
+  const agent = createAgent(agentArgs);
 
   const continueExecution = async (signal?: AbortSignal) => {
     const { messages, prompt, step = 0, ctx, llmConfig } = recoveryData;
@@ -495,7 +548,7 @@ export function recoverOpenAICompatibleAgent(
       `[AgentExecutor] 🔄 Recovering from step ${step} with ${messages.length} messages`
     );
 
-    return agent.execute({
+    return agent.run({
       prompt,
       messages: [...messages],
       step: step + 1,
@@ -516,5 +569,4 @@ export function recoverOpenAICompatibleAgent(
   };
 }
 
-export const createAgent = createOpenAICompatibleAgent
-export type CreateAgent = typeof createOpenAICompatibleAgent
+
