@@ -152,7 +152,7 @@ export function createAgent({
 
   const { llm, model, format = "text" } = createProvider();
 
-  const compressMessages = (messages: ChatCompletionMessageParam[]) => {
+  const compressMessages = (messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] => {
     if (!enableMessageCompression || messages.length <= maxMessageHistory) {
       return messages;
     }
@@ -170,7 +170,7 @@ export function createAgent({
       ...systemMessages,
       ...(firstUserMessage ? [firstUserMessage] : []),
       {
-        role: "system",
+        role: "system" as const,
         content: "[CONTEXT_TRUNCATED]",
       },
       ...recentMessages.filter(m => m !== firstUserMessage)
@@ -585,4 +585,4 @@ export function recoverOpenAICompatibleAgent(
   };
 }
 
-
+export type Agent = ReturnType<typeof createAgent>;
