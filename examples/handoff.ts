@@ -1,5 +1,6 @@
 import OpenAI from "openai";
-import { AgentEvent, createAgent } from "../src/agent";
+import { createAgent } from "../src/agent";
+import { z } from "zod";
 
 const createProvider = () => ({
   llm: new OpenAI({
@@ -9,10 +10,20 @@ const createProvider = () => ({
   model: "google/gemini-2.5-flash",
 })
 
+const outputSchema = z.object({
+  content: z.string()
+})
+
 const spanishAgent = createAgent({
   createProvider,
   name: "Spanish agent",
   instructions: "You only speak Spanish"
+});
+
+const japaneseAgent = createAgent({
+  createProvider,
+  name: "Japanese agent",
+  instructions: "You only speak Japanese"
 });
 
 const englishAgent = createAgent({
@@ -27,19 +38,22 @@ const chineseAgent = createAgent({
   instructions: "You only speak Chinese"
 });
 
+
 const triageAgent = createAgent({
   createProvider,
   name: "Triage agent",
+  outputSchema,
+  verbose: true,
   instructions: "Handoff to the appropriate agent based on the language of the request.",
-  tools: [spanishAgent.asTool(), englishAgent.asTool(), chineseAgent.asTool()]
+  tools: [spanishAgent.asTool(), englishAgent.asTool(), chineseAgent.asTool(), japaneseAgent.asTool()]
 });
 
 
-triageAgent.on(AgentEvent.Log, console.log)
-triageAgent.on(AgentEvent.Completed, ({ stats }) => console.log(stats))
-
-triageAgent
-  .run({ input: "你好!你是谁？都会什么？" })
-  .then(console.log);
-
+(async () => {
+  console.log(await triageAgent.run({ input: "你好!你是谁？都会什么？" }))
+  console.log(await triageAgent.run({ input: "こんにちは!私は誰ですか？何をしますか？" }))
+  console.log(await triageAgent.run({ input: "Hello! Who are you? What do you do?" }))
+  console.log(await triageAgent.run({ input: "¡Hola! ¿Quién eres? ¿A qué te dedicas?" }))
+})()
+  .finally(process.exit)
 

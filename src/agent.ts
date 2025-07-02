@@ -80,7 +80,7 @@ export type AgentExecutorArgs = {
   signal?: AbortSignal;
 };
 
-const MAX_AGENT_STEPS = 888;
+const MAX_AGENT_STEPS = 65535;
 
 export function createAgent({
   createProvider,
@@ -90,7 +90,7 @@ export function createAgent({
   outputSchema,
   inputSchema,
   tools = [],
-  maxTurns = 12,
+  maxTurns = 88,
   verbose = false,
   enableMessageCompression = true,
   compression,
@@ -325,7 +325,7 @@ export function createAgent({
           instructions,
           description ?? "",
           jsonOutputInstruction
-        ].filter(v => typeof v === 'string' && v.trim().length > 0).join("\n\n"); // 确保过滤掉空字符串和只包含空格的字符串
+        ].filter(v => typeof v === 'string' && v.trim().length > 0).join("\n\n")
 
         const userMessage = typeof input === "string" ? input : "```json" + JSON.stringify(input, null, 2) + "```"
         messages = [
@@ -351,8 +351,8 @@ export function createAgent({
 
       const mergedLLMConfig = {
         temperature: 0.1,
-        frequency_penalty: 0.6,
-        presence_penalty: 0.6,
+        frequency_penalty: 1,
+        presence_penalty: 1,
         ...defaultLLMConfig,
         ...llmConfig,
       };
