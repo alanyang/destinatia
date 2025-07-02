@@ -47,7 +47,7 @@ const getStockPriceTool = defineTool({
 })
 
 const agent = createAgent({
-  createLLM: () => ({
+  createProvider: () => ({
     llm: new OpenAI({
       apiKey: process.env.OPENROUTER_API_KEY,
       baseURL: process.env.OPENROUTER_BASE_URL,
@@ -56,12 +56,14 @@ const agent = createAgent({
     // format: "text"
   }),
   name: "technical_support_bot",
-  instructions: "You are about to interact with a virtual assistant. Please provide your input in the form of a question or statement.",
-  description: "You are familiar with major technology companies and technology news",
+  instructions: "You are familiar with major technology companies and technology news",
   outputSchema: z.object({
     ceo_name: z.string().describe("Name of the CEO"),
     stock_price: z.number().describe("Current stock price"),
     recent_news: z.array(z.string()).describe("Summary of recent news about the CEO")
+  }),
+  inputSchema: z.object({
+    prompt: z.string().describe("User input"),
   }),
   persistentHistory: (data) => {
   },
@@ -71,11 +73,11 @@ const agent = createAgent({
 agent.on(AgentEvent.Log, (data) => {
   console.log(data)
 })
-agent.on(AgentEvent.Completed, (data) => {
-  console.log(data.stats)
-})
 
-agent.run({ prompt: "I want to know who is the CEO of Apple Inc. (AAPL). Then, help me find out what this CEO recently said (news), and at the same time help me check Apple Inc.'s stock price today." })
-  .catch(console.error)
+agent.run({
+  input: {
+    prompt: "I want to know who is the CEO of Apple Inc. (AAPL). Then, help me find out what this CEO recently said (news), and at the same time help me check Apple Inc.'s stock price today."
+  }
+})
   .then(content => console.log(content))
 

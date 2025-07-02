@@ -55,11 +55,11 @@ export type ExecutionStats = {
 };
 
 export type AgentArgs = {
-  createLLM: () => { llm: OpenAI, model: string, format?: "json_object" | "text" };
+  createProvider: () => { llm: OpenAI, model: string, format?: "json_object" | "text" };
   name: string;
   instructions: string;
   description?: string;
-  tools: Tool<any, any>[];
+  tools?: Tool<any, any>[];
   outputSchema?: z.ZodObject<any>;
   inputSchema?: z.ZodObject<any>;
   maxTurns?: number;
@@ -72,7 +72,7 @@ export type AgentArgs = {
 };
 
 export type AgentExecutorArgs = {
-  prompt: string | Record<string, unknown>;
+  input: string | Record<string, unknown>;
   messages?: ChatCompletionMessageParam[];
   step?: number;
   ctx?: Context;
@@ -83,13 +83,13 @@ export type AgentExecutorArgs = {
 const MAX_AGENT_STEPS = 888;
 
 export function createAgent({
-  createLLM,
-  tools,
+  createProvider,
   name,
   instructions,
   description,
   outputSchema,
   inputSchema,
+  tools = [],
   maxTurns = 12,
   verbose = false,
   enableMessageCompression = true,
@@ -150,9 +150,9 @@ export function createAgent({
 
   validateTools();
 
-  const { llm, model, format = "text" } = createLLM();
+  const { llm, model, format = "text" } = createProvider();
 
-  const compressMessages = (messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] => {
+  const compressMessages = (messages: ChatCompletionMessageParam[]) => {
     if (!enableMessageCompression || messages.length <= maxMessageHistory) {
       return messages;
     }
@@ -169,6 +169,10 @@ export function createAgent({
     const compressed = [
       ...systemMessages,
       ...(firstUserMessage ? [firstUserMessage] : []),
+      {
+        role: "system",
+        content: "[CONTEXT_TRUNCATED]",
+      },
       ...recentMessages.filter(m => m !== firstUserMessage)
     ];
 
@@ -187,7 +191,7 @@ export function createAgent({
   ): Promise<any> => {
     const typedArgs: z.infer<typeof tool.validators.args> = args as any;
     if (!tool.middlewares || tool.middlewares.length === 0) {
-      return tool.handler(typedArgs, ctx); // 直接调用 handler，传入 context
+      return tool.handler(typedArgs, ctx);
     }
 
     let index = 0;
@@ -276,7 +280,7 @@ export function createAgent({
   };
 
   const run = async ({
-    prompt,
+    input,
     messages = [],
     step = 0,
     ctx,
@@ -306,19 +310,26 @@ export function createAgent({
       }
 
       if (messages.length === 0) {
+
+        let jsonOutputInstruction = "";
+        if (outputSchema) {
+          jsonOutputInstruction += `Your final response MUST be a JSON object that strictly adheres to the following schema.\n`;
+          jsonOutputInstruction += `You should only make tool calls if necessary to gather the information required to construct this JSON object.\n`;
+          if (format === "text") {
+            jsonOutputInstruction += `Please wrap the JSON object within a markdown code block, like this:\n\`\`\`json\n{ /* JSON content */ }\n\`\`\`\nDo not add any other conversational text or explanations outside the JSON block.\n`;
+          }
+          jsonOutputInstruction += `Final output JSON schema is: \n\`\`\`json${JSON.stringify(zodToJsonSchema(outputSchema, {}), null, 2)}\`\`\``;
+        }
+
         const systemMessage = [
           instructions,
           description ?? "",
-          outputSchema ?
-            `Your final response MUST be a JSON object that strictly adheres to the following schema.` : "",
-          outputSchema ?
-            `You should only make tool calls if necessary to gather the information required to construct this JSON object.` : "",
-          outputSchema ?
-            `final output json schema is: \n\`\`\`json${JSON.stringify(zodToJsonSchema(outputSchema, {}), null, 2)}\`\`\`` : ""]
+          jsonOutputInstruction
+        ].filter(v => typeof v === 'string' && v.trim().length > 0).join("\n\n"); // 确保过滤掉空字符串和只包含空格的字符串
 
-        const userMessage = typeof prompt === "string" ? prompt : "```json" + JSON.stringify(prompt, null, 2) + "```"
+        const userMessage = typeof input === "string" ? input : "```json" + JSON.stringify(input, null, 2) + "```"
         messages = [
-          { role: "system", content: systemMessage.filter(v => !!v.length).join("\n\n") },
+          { role: "system", content: systemMessage },
           { role: "user", content: userMessage }
         ]
       } else {
@@ -330,8 +341,8 @@ export function createAgent({
       }
 
       if (step === 0) {
-        event.emit(AgentEvent.Start, { prompt, ctx });
-        log(`[AgentExecutor] 🚀 Starting agent. User prompt: "${prompt}"`);
+        event.emit(AgentEvent.Start, { prompt: input, ctx });
+        log(`[AgentExecutor] 🚀 Starting agent. User prompt: "${typeof input === 'object' ? JSON.stringify(input, null, 2) : input}"`);
         updateStats({ status: 'running', currentStep: step });
       } else {
         log(`[AgentExecutor] 🔄 Start Cycle ${step}`);
@@ -350,12 +361,16 @@ export function createAgent({
 
       let response: OpenAI.Chat.Completions.ChatCompletion;
       try {
+        const toolOptions = !!tools?.length ?
+          {
+            tools: tools.map(v => toolModelSchema(v)),
+            tool_choice: "auto" as const
+          } : {}
         response = await llm.chat.completions.create({
           ...mergedLLMConfig,
           model,
           messages: messages,
-          tools: tools.map(v => toolModelSchema(v)),
-          tool_choice: "auto",
+          ...toolOptions,
           response_format: { type: format }
         });
       } catch (llmError) {
@@ -367,7 +382,6 @@ export function createAgent({
         throw new Error(`LLM call failed: ${(llmError as Error).message}`);
       }
 
-      // 更新LLM调用统计
       const tokensUsed = response.usage?.total_tokens || 0;
       updateStats({
         llmCalls: stats.llmCalls + 1,
@@ -394,7 +408,7 @@ export function createAgent({
           await persistentHistory({
             messages,
             step,
-            prompt,
+            prompt: input,
             ctx,
             llmConfig,
           });
@@ -415,18 +429,18 @@ export function createAgent({
             const data = jsonSafeParse(content);
             if (!data) {
               error(`[AgentExecutor] ❌ Step ${step}: Final output is not a valid JSON object:`, content)
-              return
+              throw new Error("Final output is not a valid JSON object")
             }
             const validated = outputSchema.safeParse(data);
             if (!validated.success) {
               error(`[AgentExecutor] ❌ Step ${step}: Final output does not match schema:, validated.error`)
-              return
+              throw new Error("Final output does not match schema")
             }
             event.emit(AgentEvent.Completed, { content: validated.data, stats: { ...stats } });
             return validated.data
           } catch (e) {
             error(`[AgentExecutor] ❌ Step ${step}: Final output extraction failed:`, content)
-            return
+            throw new Error("Final output extraction failed")
           }
         }
         event.emit(AgentEvent.Completed, { content, stats: { ...stats } });
@@ -455,7 +469,7 @@ export function createAgent({
             await persistentHistory({
               messages,
               step,
-              prompt,
+              prompt: input,
               ctx,
               llmConfig,
             });
@@ -465,7 +479,7 @@ export function createAgent({
         }
 
         return await run({
-          prompt,
+          input,
           messages,
           step: step + 1,
           ctx,
@@ -489,6 +503,8 @@ export function createAgent({
   return {
     event,
     llm,
+    model,
+    format,
     run,
     addTool: (tool: Tool<z.ZodObject<any>, z.ZodTypeAny>) => {
       tools.push(tool);
@@ -501,7 +517,7 @@ export function createAgent({
     getStats: () => stats,
     asTool: () => {
       return defineTool({
-        name,
+        name: name.toLowerCase().split(" ").join("_"),
         description: instructions + (description ?? ""),
         validators: {
           args: inputSchema ?? z.object({ prompt: z.string() }),
@@ -509,7 +525,7 @@ export function createAgent({
         },
         handler: async (data, ctx) =>
           await run({
-            prompt: data,
+            input: data,
             ctx
           })
       })
@@ -525,7 +541,7 @@ export function createAgent({
 
 export type RecoverAgentArgs = {
   messages: ChatCompletionMessageParam[];
-  prompt: string;
+  input: Record<string, unknown> | string;
   step?: number;
   ctx?: Context;
   llmConfig?: LLMConfig;
@@ -538,7 +554,7 @@ export function recoverOpenAICompatibleAgent(
   const agent = createAgent(agentArgs);
 
   const continueExecution = async (signal?: AbortSignal) => {
-    const { messages, prompt, step = 0, ctx, llmConfig } = recoveryData;
+    const { messages, input, step = 0, ctx, llmConfig } = recoveryData;
 
     if (!Array.isArray(messages) || messages.length === 0) {
       throw new Error("Invalid recovery data: messages must be a non-empty array");
@@ -549,7 +565,7 @@ export function recoverOpenAICompatibleAgent(
     );
 
     return agent.run({
-      prompt,
+      input,
       messages: [...messages],
       step: step + 1,
       ctx,
