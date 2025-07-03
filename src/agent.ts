@@ -4,7 +4,9 @@ import { ChatCompletionMessageParam } from "openai/resources/index.mjs";
 import { Tool, Context, toolModelSchema, defineTool } from "./tool";
 import { z } from "zod";
 import zodToJsonSchema from "zod-to-json-schema";
-import { jsonSafeParse } from "./utils";
+import { jsonSafeParse, normailizeName } from "./utils";
+import { ChatCompletionTool } from "openai/resources/index";
+import { createDefaultProvider, providerFactory } from "./provider";
 
 export type LLMConfig = {
   temperature?: number;
@@ -55,7 +57,7 @@ export type ExecutionStats = {
 };
 
 export type AgentArgs = {
-  createProvider: () => { llm: OpenAI, model: string, format?: "json_object" | "text" };
+  createProvider?: providerFactory;
   name: string;
   instructions: string;
   description?: string;
@@ -83,19 +85,19 @@ export type AgentExecutorArgs = {
 const MAX_AGENT_STEPS = 65535;
 
 export function createAgent({
-  createProvider,
   name,
   instructions,
   description,
   outputSchema,
   inputSchema,
+  createProvider = createDefaultProvider,
   tools = [],
   maxTurns = 88,
   verbose = false,
   enableMessageCompression = true,
-  compression,
   maxMessageHistory = 50,
   defaultLLMConfig = {},
+  compression,
   persistentHistory,
 }: AgentArgs) {
 
@@ -189,9 +191,13 @@ export function createAgent({
     args: z.ZodTypeAny,
     ctx?: Context
   ): Promise<any> => {
-    const typedArgs: z.infer<typeof tool.validators.args> = args as any;
     if (!tool.middlewares || tool.middlewares.length === 0) {
-      return tool.handler(typedArgs, ctx);
+      if (tool.validators?.args) {
+        const typedArgs: z.infer<typeof tool.validators.args> = args as any;
+        return tool.handler(typedArgs, ctx);
+      } else {
+        return tool.handler(args, ctx)
+      }
     }
 
     let index = 0;
@@ -363,7 +369,7 @@ export function createAgent({
       try {
         const toolOptions = !!tools?.length ?
           {
-            tools: tools.map(v => toolModelSchema(v)),
+            tools: tools.map(v => toolModelSchema(v)) as ChatCompletionTool[],
             tool_choice: "auto" as const
           } : {}
         response = await llm.chat.completions.create({
@@ -506,6 +512,11 @@ export function createAgent({
     model,
     format,
     run,
+    name,
+    instructions,
+    description,
+    outputSchema,
+    inputSchema,
     addTool: (tool: Tool<z.ZodObject<any>, z.ZodTypeAny>) => {
       tools.push(tool);
       validateTools();
@@ -515,9 +526,9 @@ export function createAgent({
     },
     getTools: () => [...tools],
     getStats: () => stats,
-    asTool: () => {
-      return defineTool({
-        name: name.toLowerCase().split(" ").join("_"),
+    asTool: () =>
+      defineTool({
+        name: normailizeName(name),
         description: instructions + (description ?? ""),
         validators: {
           args: inputSchema ?? z.object({ prompt: z.string() }),
@@ -529,7 +540,7 @@ export function createAgent({
             ctx
           })
       })
-    },
+    ,
     on: (eventName: AgentEvent, listener: (...args: any[]) => void) => {
       event.on(eventName, listener);
     },
@@ -547,7 +558,7 @@ export type RecoverAgentArgs = {
   llmConfig?: LLMConfig;
 };
 
-export function recoverOpenAICompatibleAgent(
+export function recoverAgent(
   agentArgs: AgentArgs,
   recoveryData: RecoverAgentArgs
 ) {
