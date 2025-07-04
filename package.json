@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "vitest",
+    "test": "jest",
     "start": "tsx src/main.ts"
   },
   "keywords": [
@@ -26,10 +26,12 @@
     "zod-to-json-schema": "^3.24.6"
   },
   "devDependencies": {
+    "@types/jest": "^30.0.0",
     "@types/node": "^24.0.8",
+    "jest": "^30.0.4",
+    "ts-jest": "^29.4.0",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3",
-    "vitest": "^3.2.4"
+    "typescript": "^5.8.3"
   },
   "engines": {
     "node": ">=22.0.0"

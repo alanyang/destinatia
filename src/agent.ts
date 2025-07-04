@@ -266,7 +266,7 @@ export function createAgent({
   }: ExecutorArgs) => {
 
     if (from) {
-      memory.handoff(from)
+      memory.handoff({ from })
     }
 
     if (resetMemory) {

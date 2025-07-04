@@ -5,38 +5,62 @@ export type CompressFunc<T extends ChatCompletionMessageParam = ChatCompletionMe
   messages: T[],
   options?: Record<string, unknown>,
 ) => T[];
-export const slideWindowCompression =
-  <T extends ChatCompletionMessageParam = ChatCompletionMessageParam>
-    (messages: T[], { windowSize = 20 }: { windowSize?: number }): T[] => {
-    const systemMessage = messages.find(m => m.role === "system");
+export function slideWindowCompression<
+  T extends ChatCompletionMessageParam = ChatCompletionMessageParam
+>
+  (
+    messages: T[],
+    { windowSize = 20 }: { windowSize?: number }
+  ): T[] {
+  const systemMessage = messages.find(m => m.role === "system");
 
-    const nonSystemMessages = messages.filter(m => m.role !== "system");
+  const nonSystemMessages = messages.filter(m => m.role !== "system");
 
-    const effectiveWindowSize = Math.max(windowSize, (systemMessage ? 1 : 0) + 1);
+  const effectiveWindowSize = Math.max(windowSize, (systemMessage ? 1 : 0) + 1);
 
-    if (nonSystemMessages.length <= effectiveWindowSize) {
-      return [...(systemMessage ? [systemMessage] : []), ...nonSystemMessages];
-    }
-
-    const [frontCount, backCount] = [
-      Math.floor((effectiveWindowSize - 1) / 3),
-      Math.ceil((effectiveWindowSize - 1) / 3) * 2
-    ];
-
-    const frontMessages = nonSystemMessages.slice(0, frontCount);
-    const backMessages = nonSystemMessages.slice(Math.max(0, nonSystemMessages.length - backCount));
-
-    const compressed: T[] = [
-      ...(systemMessage ? [systemMessage] : []),
-      ...frontMessages,
-      {
-        role: "system" as const,
-        content: "[CONTEXT_TRUNCATED]"
-      } as T,
-      ...backMessages,
-    ];
-    return compressed;
+  if (nonSystemMessages.length <= effectiveWindowSize) {
+    return [...(systemMessage ? [systemMessage] : []), ...nonSystemMessages];
   }
+
+  const [frontCount, backCount] = [
+    Math.floor((effectiveWindowSize - 1) / 3),
+    Math.ceil((effectiveWindowSize - 1) / 3) * 2
+  ];
+
+  const frontMessages = nonSystemMessages.slice(0, frontCount);
+  const backMessages = nonSystemMessages.slice(Math.max(0, nonSystemMessages.length - backCount));
+
+
+  const lastFrontRole =
+    frontMessages.length > 0
+      ? frontMessages[frontMessages.length - 1].role
+      : systemMessage
+        ? systemMessage.role
+        : "assistant";
+
+  const firstBackRole =
+    backMessages.length > 0
+      ? backMessages[0].role
+      : lastFrontRole === "user" ? "assistant" : "user";
+
+  const needTruncated =
+    frontMessages.length > 0 &&
+    backMessages.length > 0 &&
+    lastFrontRole === firstBackRole;
+
+  const truncatedRole = lastFrontRole === "user" ? "assistant" : "user";
+
+  const compressed: T[] = [
+    ...(systemMessage ? [systemMessage] : []),
+    ...frontMessages,
+    ...(needTruncated
+      ? [{ role: truncatedRole, content: "[CONTEXT_TRUNCATED]" } as T]
+      : []),
+    ...backMessages,
+  ];
+
+  return compressed;
+}
 
 
 type MemoryArgs = {
@@ -68,7 +92,7 @@ export class Memory<
   }
 
   get messages(): T[] {
-    return [...this.memories]
+    return this.memories.map(m => ({ ...m }));
   }
 
   get size(): number {
@@ -111,23 +135,23 @@ export class Memory<
     this.memories = [];
   }
 
-  toStirng() {
+  toString() {
     return JSON.stringify(this.memories, null, 2)
   }
 
-  createHandoffSystemMessage({
-    from, ctx = {}
+  static buildHandoffSystemMessage({
+    from, to, ctx = {}
   }: {
-    from: Memory<T>, ctx?: Context
-  }): T {
-    const message = `
-# AGENT HANDOFF: ${from.name} -> ${this.name}
+    from: Memory, to: Memory, ctx?: Context
+  }): string {
+    return `
+# AGENT HANDOFF: ${from.name} -> ${to.name}
 
 ## Previous Agent Context:
 ${from.systemMessage}
 
 ## Current Agent Instructions:
-${this.systemMessage}
+${to.systemMessage}
 
 ## Handoff Context:
 \`\`\`json
@@ -137,15 +161,27 @@ ${JSON.stringify(ctx, null, 2)}
 ## Guidelines:
 - You have full access to the conversation history
 - Continue the task seamlessly from where the previous agent left off
-- Use your specialized capabilities as {to_agent.name}
+- Use your specialized capabilities as ${to.name}
 `
+  }
+
+  createHandoffSystemMessage({
+    from, ctx = {}
+  }: {
+    from: Memory<T>, ctx?: Context
+  }): T {
+    const message = Memory.buildHandoffSystemMessage({ from, to: this, ctx })
     return { role: "system" as const, content: message } as T
   }
 
-  handoff(from: Memory<T>) {
+  handoff({ from, inherit = false }: { from: Memory<T>, inherit?: boolean }) {
     const newSystemMessage = this.createHandoffSystemMessage({ from });
     const [_, ...messages] = this.memories
-    const memories = [newSystemMessage, ...messages]
+    const [_system, ...fromMessages] = from.memories
+
+    const memories = !inherit ?
+      [newSystemMessage, ...messages] :
+      [newSystemMessage, ...fromMessages, ...messages]
     this.memories = memories
   }
 
@@ -157,7 +193,7 @@ ${JSON.stringify(ctx, null, 2)}
       if (compress) {
         effectiveMessages = compress(effectiveMessages);
       } else {
-        effectiveMessages = slideWindowCompression(effectiveMessages, { windowSize: 30 });
+        effectiveMessages = slideWindowCompression(effectiveMessages, { windowSize: this.maxHistory });
       }
     }
     this.memories = [...effectiveMessages]
