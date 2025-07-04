@@ -69,19 +69,20 @@ export type MemoryEvent =
   "reset" | "change" | "init"
 
 
-type MemoryArgs = {
+type MemoryArgs<T> = {
   name: string
-  systemMessage: string
+  systemMessage?: string
   maxHistory?: number
   logger?: pino.Logger
   event?: EventEmitter
+  initMessages?: T[]
 }
 export class Memory<
   T extends ChatCompletionMessageParam = ChatCompletionMessageParam
 > {
 
   name: string
-  instructions: string
+  instructions: string = ""
   private memories: T[] = [];
 
   private defaultMaxHistory: number = 60;
@@ -90,18 +91,28 @@ export class Memory<
 
   private event: EventEmitter
 
-  constructor({ name, systemMessage, maxHistory, event }: MemoryArgs) {
+  constructor({ name, systemMessage, maxHistory, event, initMessages }: MemoryArgs<T>) {
     this.name = name
-    this.instructions = systemMessage
+    this.instructions = systemMessage ?? ""
     this.event = event ?? new EventEmitter()
     this.maxHistory = maxHistory ?? this.defaultMaxHistory;
-    const system = {
-      role: "system" as const,
-      content: systemMessage
-    } as T
-    this.memories = [system]
+    if (initMessages) {
+      this.memories = [...initMessages]
+    } else {
+      const system = {
+        role: "system" as const,
+        content: systemMessage
+      } as T
+      this.memories = [system]
+    }
     this.event.emit("init")
     this.event.emit("change")
+  }
+
+  static fromMemories<
+    T extends ChatCompletionMessageParam = ChatCompletionMessageParam
+  >(memories: T[]) {
+
   }
 
   get messages(): T[] {

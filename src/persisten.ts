@@ -5,7 +5,7 @@ import { Context } from "./tool"
 export type PersistenceParams = {
   messages: ChatCompletionMessageParam[];
   step: number;
-  prompt: string | Record<string, unknown>;
+  prompt?: string | Record<string, unknown>;
   ctx?: Context;
   llmConfig?: LLMConfig;
 };
@@ -13,7 +13,7 @@ export type PersistenceParams = {
 
 export type RecoverAgentArgs = {
   messages: ChatCompletionMessageParam[];
-  input: Record<string, unknown> | string;
+  input?: Record<string, unknown> | string;
   step?: number;
   ctx?: Context;
   llmConfig?: LLMConfig;

@@ -13,7 +13,6 @@ const searchNewsTool = defineTool({
     return: z.array(z.string()).describe("A list of relevant news headlines or summaries."),
   },
   handler: async ({ query }) => {
-    console.log(`[TOOL CALL] Executing search_news for query: "${query}"`);
     if (query.toLowerCase().includes("apple") || query.toLowerCase().includes("tech")) {
       return ["Apple launches new Vision Pro 2 headset", "Apple Q1 earnings beat expectations", "Google DeepMind announces breakthrough AI research"];
     } else if (query.toLowerCase().includes("football")) {
@@ -23,7 +22,6 @@ const searchNewsTool = defineTool({
   },
 });
 
-// 3. 定义参议员 (Senators)
 const plannerSenator = createAgent({
   name: "Planner Senator",
   instructions: `You are a strategic planner. Your task is to understand the user's news request and formulate a precise plan, recommending which expert senator should provide the information.
@@ -40,7 +38,7 @@ const plannerSenator = createAgent({
     final_answer: z.string().optional().describe("If the plan directly results in a final answer.")
   }),
   maxTurns: 3,
-  verbose: true,
+  verbose: false,
 });
 
 const techNewsSenator = createAgent({
@@ -53,7 +51,7 @@ const techNewsSenator = createAgent({
     source: z.string().describe("The source of the news (e.g., 'internal database', 'simulated RSS feed').")
   }),
   maxTurns: 3,
-  verbose: true,
+  verbose: false,
 });
 
 const footballNewsSenator = createAgent({
@@ -66,13 +64,19 @@ const footballNewsSenator = createAgent({
     league_updates: z.array(z.string()).describe("Updates on football leagues."),
   }),
   maxTurns: 3,
-  verbose: true,
+  verbose: false,
 });
 
 
 
 const senators = [plannerSenator, techNewsSenator, footballNewsSenator];
-const council = createCouncil({ senators, maxTurns: 10 }); // 设置议事厅最大轮次
+const council = createCouncil({
+  name: "News reporter meeting",
+  senators, maxTurns: 58,
+  // outputSchema: z.object({
+  //   news: z.array(z.string()).describe("A list of relevant news articles or summaries."),
+  // })
+});
 council.run({
   input: "I need to know the latest news on Apple and some recent football match results."
 })

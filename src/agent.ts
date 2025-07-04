@@ -71,13 +71,13 @@ export type AgentArgs = {
 };
 
 export type ExecutorArgs = {
-  input: string | Record<string, unknown>;
-  messages?: ChatCompletionMessageParam[];
+  input?: string | Record<string, unknown>;
   step?: number;
   ctx?: Context;
   llmConfig?: LLMConfig;
   signal?: AbortSignal;
   from?: Memory
+  sharedMemory?: Memory
   resetMemory?: boolean
 };
 
@@ -258,7 +258,7 @@ export function createAgent({
     }
   };
 
-  const memory: Memory = new Memory({ name, systemMessage: instructions, logger: logger.child({ name: `${name} memory` }) })
+  let memory: Memory = new Memory({ name, systemMessage: instructions, logger: logger.child({ name: `${name} memory` }) })
 
   memory.on("change", () => {
     logger.trace(memory.toString())
@@ -273,17 +273,22 @@ export function createAgent({
     ctx,
     signal,
     from,
+    sharedMemory,
     step = 0,
     llmConfig = {},
     resetMemory = true,
   }: ExecutorArgs) => {
 
-    if (from) {
-      memory.handoff({ from })
-    }
 
-    if (resetMemory) {
-      memory.reset()
+    if (sharedMemory) {
+      memory = sharedMemory
+    } else {
+      if (from) {
+        memory.handoff({ from })
+      }
+      if (resetMemory) {
+        memory.reset()
+      }
     }
 
     const updateStats = (updates: Partial<ExecutionStats>) => {
@@ -324,7 +329,11 @@ export function createAgent({
           jsonOutputInstruction
         ].filter(v => typeof v === 'string' && v.trim().length > 0).join("\n\n")
 
-        const userMessage = typeof input === "string" ? input : "```json" + JSON.stringify(input, null, 2) + "```"
+        const userMessage = typeof input === "string" ?
+          input :
+          typeof input === "object" ?
+            "```json" + JSON.stringify(input, null, 2) + "```" :
+            "";
         memory.replaceSystemMessage(systemMessage)
         memory.add(
           { role: "user", content: userMessage }
@@ -427,18 +436,21 @@ export function createAgent({
           try {
             const data = jsonSafeParse(content);
             if (!data) {
+              console.error(zodToJsonSchema(outputSchema))
               error(`[AgentExecutor] ❌ Step ${step}: Final output is not a valid JSON object: ${content} `)
               throw new Error("Final output is not a valid JSON object")
             }
             const validated = outputSchema.safeParse(data);
             if (!validated.success) {
+              console.error(validated.error.message)
               error(`[AgentExecutor] ❌ Step ${step}: Final output does not match schema:, validated.error`)
               throw new Error("Final output does not match schema")
             }
             event.emit(AgentEvent.Completed, { content: validated.data, stats: { ...stats } });
             return validated.data
           } catch (e) {
-            error(`[AgentExecutor] ❌ Step ${step}: Final output extraction failed: ${content} `)
+            // error(`[AgentExecutor] ❌ Step ${step}: Final output extraction failed: ${content} `)
+            console.error(e)
             throw new Error("Final output extraction failed")
           }
         }
