@@ -1,12 +1,16 @@
 import OpenAI from "openai";
 import events from "node:events";
+import { z } from "zod";
+import { v4 as uuid } from "uuid"
 import { ChatCompletionMessageParam } from "openai/resources/index.mjs";
 import { Tool, Context, toolModelSchema, defineTool } from "./tool";
-import { z } from "zod";
+
 import zodToJsonSchema from "zod-to-json-schema";
 import { jsonSafeParse, normailizeName } from "./utils";
 import { ChatCompletionTool } from "openai/resources/index";
 import { createDefaultProvider, providerFactory } from "./provider";
+import { CompressFunc, Memory } from "./memory";
+import { PersistentHistoryFunction } from "./persisten";
 
 export type LLMConfig = {
   temperature?: number;
@@ -16,13 +20,6 @@ export type LLMConfig = {
   presencePenalty?: number;
 };
 
-export type PersistenceParams = {
-  messages: ChatCompletionMessageParam[];
-  step: number;
-  prompt: string | Record<string, unknown>;
-  ctx?: Context;
-  llmConfig?: LLMConfig;
-};
 
 export enum AgentEvent {
   Start = "start",
@@ -40,8 +37,6 @@ export enum AgentEvent {
   StatsUpdate = "stats_update",
 }
 
-export type PersistentHistoryFunction = (params: PersistenceParams) => void | Promise<void>;
-export type CompressionMessagesFunction = (messages: ChatCompletionMessageParam[]) => ChatCompletionMessageParam[]
 
 export type ExecutionStats = {
   totalTokens: number;
@@ -67,19 +62,21 @@ export type AgentArgs = {
   maxTurns?: number;
   verbose?: boolean;
   enableMessageCompression?: boolean;
-  compression?: CompressionMessagesFunction;
+  compression?: CompressFunc;
   maxMessageHistory?: number;
   defaultLLMConfig?: LLMConfig;
   persistentHistory?: PersistentHistoryFunction;
 };
 
-export type AgentExecutorArgs = {
+export type ExecutorArgs = {
   input: string | Record<string, unknown>;
   messages?: ChatCompletionMessageParam[];
   step?: number;
   ctx?: Context;
   llmConfig?: LLMConfig;
   signal?: AbortSignal;
+  from?: Memory
+  resetMemory?: boolean
 };
 
 const MAX_AGENT_STEPS = 65535;
@@ -94,12 +91,12 @@ export function createAgent({
   tools = [],
   maxTurns = 88,
   verbose = false,
-  enableMessageCompression = true,
-  maxMessageHistory = 50,
   defaultLLMConfig = {},
   compression,
   persistentHistory,
 }: AgentArgs) {
+
+  const id = uuid()
 
   if (maxTurns > MAX_AGENT_STEPS) {
     maxTurns = MAX_AGENT_STEPS
@@ -147,44 +144,11 @@ export function createAgent({
     if (!tools.every(v => typeof v.handler === "function")) {
       throw `Tools must have a handler function`
     }
-
   };
 
   validateTools();
 
   const { llm, model, format = "text" } = createProvider();
-
-  const compressMessages = (messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] => {
-    if (!enableMessageCompression || messages.length <= maxMessageHistory) {
-      return messages;
-    }
-
-    if (compression) {
-      return compression(messages)
-    }
-
-    const systemMessages = messages.filter(m => m.role === "system");
-    const userMessages = messages.filter(m => m.role === "user");
-    const recentMessages = messages.slice(-(maxMessageHistory - systemMessages.length - 1));
-
-    const firstUserMessage = userMessages?.at(0)
-    const compressed = [
-      ...systemMessages,
-      ...(firstUserMessage ? [firstUserMessage] : []),
-      {
-        role: "system" as const,
-        content: "[CONTEXT_TRUNCATED]",
-      },
-      ...recentMessages.filter(m => m !== firstUserMessage)
-    ];
-
-    event.emit(AgentEvent.MessageCompressed, {
-      originalCount: messages.length,
-      compressedCount: compressed.length
-    });
-
-    return compressed;
-  };
 
   const applyMiddleware = async (
     tool: Tool<z.ZodObject<any>, z.ZodTypeAny>,
@@ -285,14 +249,29 @@ export function createAgent({
     }
   };
 
+  const memory: Memory = new Memory({ name, systemMessage: instructions })
+
+  const toString = (): string => {
+    return `Agent: [${id}]@${name}, ${memory.systemMessage}`
+  }
+
   const run = async ({
     input,
-    messages = [],
-    step = 0,
     ctx,
-    llmConfig = {},
     signal,
-  }: AgentExecutorArgs) => {
+    from,
+    step = 0,
+    llmConfig = {},
+    resetMemory = true,
+  }: ExecutorArgs) => {
+
+    if (from) {
+      memory.handoff(from)
+    }
+
+    if (resetMemory) {
+      memory.reset()
+    }
 
     const updateStats = (updates: Partial<ExecutionStats>) => {
       stats = { ...stats, ...updates }
@@ -315,8 +294,7 @@ export function createAgent({
         throw new Error(`Maximum execution steps (${maxTurns}) reached. Task not completed.`);
       }
 
-      if (messages.length === 0) {
-
+      if (memory.size <= 1) {
         let jsonOutputInstruction = "";
         if (outputSchema) {
           jsonOutputInstruction += `Your final response MUST be a JSON object that strictly adheres to the following schema.\n`;
@@ -334,17 +312,18 @@ export function createAgent({
         ].filter(v => typeof v === 'string' && v.trim().length > 0).join("\n\n")
 
         const userMessage = typeof input === "string" ? input : "```json" + JSON.stringify(input, null, 2) + "```"
-        messages = [
-          { role: "system", content: systemMessage },
+        memory.replaceSystemMessage(systemMessage)
+        memory.add(
           { role: "user", content: userMessage }
-        ]
+        )
       } else {
-        const rawMessagesLength = messages.length
-        messages = compressMessages(messages);
-        if (rawMessagesLength > messages.length) {
+        const rawMessagesLength = memory.size
+        memory.arrange(compression);
+        if (rawMessagesLength > memory.size) {
           updateStats({ compressedMessages: stats.compressedMessages + 1 });
         }
       }
+
 
       if (step === 0) {
         event.emit(AgentEvent.Start, { prompt: input, ctx });
@@ -363,7 +342,7 @@ export function createAgent({
         ...llmConfig,
       };
 
-      event.emit(AgentEvent.LLMCallStart, { step, messageCount: messages.length });
+      event.emit(AgentEvent.LLMCallStart, { step, messageCount: memory.size });
 
       let response: OpenAI.Chat.Completions.ChatCompletion;
       try {
@@ -372,10 +351,13 @@ export function createAgent({
             tools: tools.map(v => toolModelSchema(v)) as ChatCompletionTool[],
             tool_choice: "auto" as const
           } : {}
+
+        log(memory.messages)
+
         response = await llm.chat.completions.create({
           ...mergedLLMConfig,
           model,
-          messages: messages,
+          messages: memory.messages,
           ...toolOptions,
           response_format: { type: format }
         });
@@ -407,12 +389,13 @@ export function createAgent({
       }
 
       const responseMessage = choice.message;
-      messages = [...messages, responseMessage];
+      memory.add(responseMessage)
 
+      log(responseMessage)
       if (persistentHistory) {
         try {
           await persistentHistory({
-            messages,
+            messages: memory.messages,
             step,
             prompt: input,
             ctx,
@@ -423,8 +406,9 @@ export function createAgent({
         }
       }
 
-      const toolCalls = responseMessage.tool_calls;
-      const content = responseMessage.content;
+
+      const { tool_calls: toolCalls, content } = responseMessage
+      log(`[AgentExecutor] 📝 Step ${step}: LLM returned message: ${content}`)
 
       if (content) {
         log(`[AgentExecutor] ✅ Step ${step}: LLM returned final content. Task completed.`);
@@ -467,13 +451,13 @@ export function createAgent({
           toolCalls.map(toolCall => executeToolCall(toolCall, ctx, signal))
         );
 
-        messages = [...messages, ...outputs];
+        memory.add(...outputs);
         log(`[AgentExecutor] 📊 Step ${step}: Tool results added to message history.`);
 
         if (persistentHistory) {
           try {
             await persistentHistory({
-              messages,
+              messages: memory.messages,
               step,
               prompt: input,
               ctx,
@@ -486,11 +470,11 @@ export function createAgent({
 
         return await run({
           input,
-          messages,
           step: step + 1,
           ctx,
           llmConfig,
           signal,
+          resetMemory: false,
         });
       }
     } catch (err) {
@@ -507,6 +491,7 @@ export function createAgent({
 
 
   return {
+    id,
     event,
     llm,
     model,
@@ -517,6 +502,8 @@ export function createAgent({
     description,
     outputSchema,
     inputSchema,
+    toString,
+    memory,
     addTool: (tool: Tool<z.ZodObject<any>, z.ZodTypeAny>) => {
       tools.push(tool);
       validateTools();
@@ -550,50 +537,3 @@ export function createAgent({
   };
 }
 
-export type RecoverAgentArgs = {
-  messages: ChatCompletionMessageParam[];
-  input: Record<string, unknown> | string;
-  step?: number;
-  ctx?: Context;
-  llmConfig?: LLMConfig;
-};
-
-export function recoverAgent(
-  agentArgs: AgentArgs,
-  recoveryData: RecoverAgentArgs
-) {
-  const agent = createAgent(agentArgs);
-
-  const continueExecution = async (signal?: AbortSignal) => {
-    const { messages, input, step = 0, ctx, llmConfig } = recoveryData;
-
-    if (!Array.isArray(messages) || messages.length === 0) {
-      throw new Error("Invalid recovery data: messages must be a non-empty array");
-    }
-
-    agent.event.emit(AgentEvent.Log,
-      `[AgentExecutor] 🔄 Recovering from step ${step} with ${messages.length} messages`
-    );
-
-    return agent.run({
-      input,
-      messages: [...messages],
-      step: step + 1,
-      ctx,
-      llmConfig,
-      signal,
-    });
-  };
-
-  return {
-    ...agent,
-    continueExecution,
-    getRecoveryInfo: () => ({
-      currentStep: recoveryData.step || 0,
-      messageCount: recoveryData.messages.length,
-      lastMessage: recoveryData.messages[recoveryData.messages.length - 1],
-    }),
-  };
-}
-
-export type Agent = ReturnType<typeof createAgent>;

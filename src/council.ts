@@ -18,78 +18,74 @@ export function createCouncil({
   senators,
   maxTurns = 58
 }: CouncilAgrs) {
-  let nextSpeakerName: string | undefined
   let currentTurn = 0
   const minutes: ChatCompletionMessageParam[] = []
 
   const { president, secretary } = createDais({ senators })
 
+
   const run = async ({ input }: Input) => {
-    if (currentTurn >= maxTurns) {
-      return await secretary.run({
-        input: "Please summarize the conversation and the final answer after reaching max turns.",
-        messages: [...minutes],
-      });
-    }
-    const managerDecisionResult = await president.run({
-      input: input,
-      messages: [...minutes],
+    minutes.push({
+      role: "user",
+      content: typeof input === "string" ? input : JSON.stringify(input),
     });
 
-    if (typeof managerDecisionResult === 'object' && managerDecisionResult !== null && 'next_speaker' in managerDecisionResult) {
-      nextSpeakerName = (managerDecisionResult as { next_speaker: string }).next_speaker;
-    } else {
-      nextSpeakerName = managerDecisionResult?.toString().trim();
-    }
-
-
-    if (!nextSpeakerName || nextSpeakerName.toUpperCase() === "FINISH") {
-      const finalSummaryResult = await secretary.run({
-        input: "Please summarize the conversation and the final answer.",
+    while (currentTurn < maxTurns) {
+      const managerDecisionResult = await president.run({
+        input: "",
         messages: [...minutes],
       });
-      return finalSummaryResult;
-    }
 
-    const speaker = senators.find(m => m.name.toLowerCase().replace(/\s+/g, '_') === nextSpeakerName?.toLowerCase().replace(/\s+/g, '_'));
-
-    currentTurn++;
-
-    if (!speaker) {
-      minutes.push({
-        role: "system",
-        content: `Manager selected an invalid agent '${nextSpeakerName}'. 
-Please choose a valid agent from ${senators.map(m => m.name).join(', ')} or FINISH.`,
-      });
-      return await run({ input })
-    }
-    next(speaker)
-  }
-
-  const next = async (speaker: Agent) => {
-    try {
-      const agentResponse = await speaker.run({
-        input: "", // Agent 已经有共享历史，无需额外 Prompt
-        messages: minutes, // Agent 将消息添加到这个数组中
-        step: currentTurn,
-      });
-
-      if (typeof agentResponse === 'string' && agentResponse.length > 0) {
-        minutes.push({ role: 'assistant', content: agentResponse, name: speaker.name });
-      } else if (typeof agentResponse === 'object' && agentResponse !== null) {
-        minutes.push({ role: 'assistant', content: JSON.stringify(agentResponse), name: speaker.name });
+      let nextSpeakerName: string | undefined;
+      if (typeof managerDecisionResult === 'object' && managerDecisionResult !== null && 'next_speaker' in managerDecisionResult) {
+        nextSpeakerName = (managerDecisionResult as { next_speaker: string }).next_speaker;
+      } else {
+        nextSpeakerName = managerDecisionResult?.toString().trim();
       }
 
+      if (!nextSpeakerName || nextSpeakerName.toUpperCase() === "FINISH") {
+        return await secretary.run({
+          input: "",
+          messages: [...minutes],
+        });
+      }
 
-    } catch (error) {
-      console.error(`Error during ${speaker.name}'s turn:`, error);
-      minutes.push({
-        role: "system",
-        content: `${speaker.name} encountered an error: ${(error as Error).message}. Manager, please choose next speaker or FINISH.`,
-      });
+      const speaker = senators.find(m => m.name.toLowerCase().replace(/\s+/g, '_') === nextSpeakerName?.toLowerCase().replace(/\s+/g, '_'));
+      currentTurn++;
+
+      if (!speaker) {
+        minutes.push({
+          role: "system",
+          content: `Manager selected an invalid agent '${nextSpeakerName}'. Please choose a valid agent from ${senators.map(m => m.name).join(', ')} or FINISH.`,
+        });
+        continue;
+      }
+
+      try {
+        const agentResponse = await speaker.run({
+          input: "",
+          messages: [...minutes],
+          step: currentTurn,
+        });
+
+        if (typeof agentResponse === 'string' && agentResponse.length > 0) {
+          minutes.push({ role: 'assistant', content: agentResponse, name: speaker.name });
+        } else if (typeof agentResponse === 'object' && agentResponse !== null) {
+          minutes.push({ role: 'assistant', content: JSON.stringify(agentResponse), name: speaker.name });
+        }
+      } catch (error) {
+        minutes.push({
+          role: "system",
+          content: `${speaker.name} encountered an error: ${(error as Error).message}. Manager, please choose next speaker or FINISH.`,
+        });
+      }
     }
-  }
 
+    return await secretary.run({
+      input: "",
+      messages: [...minutes],
+    });
+  }
 
   return {
     run,
