@@ -1,4 +1,5 @@
-**Destinatia is a multi-agent framework**
+***Destinatia***
+*Destinatia is a general multi-agent dialogue system framework for building conversational agents.simplicity, flexibility, and observable are the key features of Destinatia. It provides a simple and intuitive way to build and manage multi-agent dialogue systems. It is designed to be easy to use, with a simple and intuitive API, and can be easily integrated into any existing codebase or framework.*
 
 *Few shot*
 ```typescript
@@ -15,6 +16,8 @@ agent.run({
   .then(console.log)
   .finally(process.exit)
 ```
+
+
 
 *ReAct*
 ```typescript
@@ -99,7 +102,9 @@ agent.run({
   .then(content => console.log(content))
 ```
 
-*Multi agent handoff*
+
+
+*Multi agents handoff*
 ```typescript
 import OpenAI from "openai";
 import { createAgent } from "../src/agent";
