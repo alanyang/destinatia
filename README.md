@@ -2,7 +2,7 @@
 
 *This is a general multi-agent dialogue system framework for building conversational agents.simplicity, flexibility, and observable are the key features of Destinatia. It provides a simple and intuitive way to build and manage multi-agent dialogue systems with event system. It is designed to be easy to use, with a simple and intuitive API, and can be easily integrated into any existing codebase or framework.*
 
-> Statuses: Our project[Blueapex Insurance](https://markdown.com.cn "Blueapex insurance")。 is already using it, but it has not been published to npm, and issues are not being handled until version 0.2 is released. It is not recommended to use it in a production environment.
+> Statuses: Our project [Blueapex Insurance](https://markdown.com.cn "Blueapex insurance") is already using it, but it has not been published to npm, and issues are not being handled until version 0.2 is released. It is not recommended to use it in a production environment.
 
 ---
 
