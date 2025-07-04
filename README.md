@@ -4,6 +4,9 @@
 
 > Statuses: Our project is already using it, but it has not been published to npm, and issues are not being handled until version 0.2 is released. It is not recommended to use it in a production environment.
 
+---
+
+#### Common AI Agent Patterns
 
 *Few shot*
 ```typescript
