@@ -7,6 +7,7 @@
     "build": "tsc",
     "test": "jest --verbose",
     "start": "tsx src/main.ts",
+    "run:instructions": "tsx examples/instructions.ts | pino-pretty",
     "run:handoff": "tsx examples/handoff.ts | pino-pretty",
     "run:news": "tsx examples/news.ts | pino-pretty",
     "run:trip": "tsx examples/trip.ts | pino-pretty"
