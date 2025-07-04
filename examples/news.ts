@@ -67,11 +67,8 @@ const agent = createAgent({
   }),
   persistentHistory: (data) => {
   },
-  verbose: false,
+  verbose: true,
   tools: [findCeoTool, searchNewsForPersonTool, getStockPriceTool],
-})
-agent.on(AgentEvent.Log, (data) => {
-  console.log(data)
 })
 
 agent.run({

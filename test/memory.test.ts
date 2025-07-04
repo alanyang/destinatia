@@ -43,26 +43,28 @@ describe("Memory", () => {
     expect(m.systemMessage).toBe("system")
   })
 
-  test("replace system message only once", () => {
-    const m = new Memory({ name: "test", systemMessage: "system" })
-    m.replaceSystemMessage("newSystem")
-    expect(m.systemMessage).toBe("newSystem")
-  })
+  describe("replace system message", () => {
+    test("only once", () => {
+      const m = new Memory({ name: "test", systemMessage: "system" })
+      m.replaceSystemMessage("newSystem")
+      expect(m.systemMessage).toBe("newSystem")
+    })
 
-  test("replace system message with empty", () => {
-    const m = new Memory({ name: "test", systemMessage: "system" })
-    m.reset()
-    expect(m.systemMessage).toBe("")
-  })
+    test("with empty", () => {
+      const m = new Memory({ name: "test", systemMessage: "system" })
+      m.reset()
+      expect(m.systemMessage).toBe("")
+    })
 
-  test("replace system message", () => {
-    const m = new Memory({ name: "test", systemMessage: "system" })
-    m.add({ role: "user", content: "hello" })
-    m.add({ role: "user", content: "hello" })
-    m.add({ role: "user", content: "hello" })
-    m.add({ role: "user", content: "hello" })
-    m.replaceSystemMessage("newSystem")
-    expect(m.systemMessage).toBe("newSystem")
+    test("more messages", () => {
+      const m = new Memory({ name: "test", systemMessage: "system" })
+      m.add({ role: "user", content: "hello" })
+      m.add({ role: "user", content: "hello" })
+      m.add({ role: "user", content: "hello" })
+      m.add({ role: "user", content: "hello" })
+      m.replaceSystemMessage("newSystem")
+      expect(m.systemMessage).toBe("newSystem")
+    })
   })
 
   describe("handoff", () => {

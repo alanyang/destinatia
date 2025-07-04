@@ -6,11 +6,12 @@ import { ChatCompletionMessageParam } from "openai/resources/index.mjs";
 import { Tool, Context, toolModelSchema, defineTool } from "./tool";
 
 import zodToJsonSchema from "zod-to-json-schema";
-import { jsonSafeParse, normailizeName } from "./utils";
+import { jsonSafeParse, normalizeName } from "./utils";
 import { ChatCompletionTool } from "openai/resources/index";
 import { createDefaultProvider, providerFactory } from "./provider";
 import { CompressFunc, Memory } from "./memory";
 import { PersistentHistoryFunction } from "./persisten";
+import { createLogger } from "./logger";
 
 export type LLMConfig = {
   temperature?: number;
@@ -24,6 +25,7 @@ export type LLMConfig = {
 export enum AgentEvent {
   Start = "start",
   Log = "log",
+  Debug = "debug",
   Warn = "warn",
   Error = "error",
   ToolCallStart = "tool_call_start",
@@ -116,19 +118,26 @@ export function createAgent({
     status: 'running',
   }
 
-  const log = (...args: any[]) => {
-    event.emit(AgentEvent.Log, ...args);
-    if (verbose) console.log(...args);
+  const logger = createLogger({ name })
+
+  const debug = (obj: unknown) => {
+    event.emit(AgentEvent.Log, obj);
+    if (verbose) logger.debug(obj);
+  }
+
+  const log = (obj: unknown) => {
+    event.emit(AgentEvent.Log, obj);
+    if (verbose) logger.info(obj);
   };
 
-  const warn = (...args: any[]) => {
-    event.emit(AgentEvent.Warn, ...args);
-    if (verbose) console.warn(...args);
+  const warn = (obj: unknown) => {
+    event.emit(AgentEvent.Warn, obj);
+    if (verbose) logger.warn(obj);
   };
 
-  const error = (...args: any[]) => {
-    event.emit(AgentEvent.Error, ...args);
-    if (verbose) console.error(...args);
+  const error = (err: Error | string) => {
+    event.emit(AgentEvent.Error, err);
+    if (verbose) logger.error(err);
   };
 
   const validateTools = () => {
@@ -232,7 +241,7 @@ export function createAgent({
       };
     } catch (err) {
       event.emit(AgentEvent.ToolCallError, { name, error: err });
-      error(`[AgentExecutor] ❌ Tool "${name}" execution failed:`, err);
+      error(`[AgentExecutor] ❌ Tool "${name}" execution failed: ${err}`);
 
       event.emit(AgentEvent.StatsUpdate, {
         updates: { toolCallsFailed: 1 },
@@ -249,7 +258,11 @@ export function createAgent({
     }
   };
 
-  const memory: Memory = new Memory({ name, systemMessage: instructions })
+  const memory: Memory = new Memory({ name, systemMessage: instructions, logger: logger.child({ name: `${name} memory` }) })
+
+  memory.on("change", () => {
+    logger.trace(memory.toString())
+  })
 
   const toString = (): string => {
     return `Agent: [${id}]@${name}, ${memory.systemMessage}`
@@ -352,8 +365,6 @@ export function createAgent({
             tool_choice: "auto" as const
           } : {}
 
-        log(memory.messages)
-
         response = await llm.chat.completions.create({
           ...mergedLLMConfig,
           model,
@@ -362,7 +373,7 @@ export function createAgent({
           response_format: { type: format }
         });
       } catch (llmError) {
-        error(`[AgentExecutor] ❌ Step ${step}: LLM call failed:`, llmError);
+        error(`[AgentExecutor] ❌ Step ${step}: LLM call failed:${llmError}`);
         updateStats({
           errors: [...stats.errors, llmError as Error],
           llmCalls: stats.llmCalls + 1
@@ -391,7 +402,6 @@ export function createAgent({
       const responseMessage = choice.message;
       memory.add(responseMessage)
 
-      log(responseMessage)
       if (persistentHistory) {
         try {
           await persistentHistory({
@@ -402,23 +412,22 @@ export function createAgent({
             llmConfig,
           });
         } catch (persistError) {
-          warn(`[AgentExecutor] ⚠️ Failed to persist messages:`, persistError);
+          warn(`[AgentExecutor] ⚠️ Failed to persist messages ${persistError}`);
         }
       }
 
 
       const { tool_calls: toolCalls, content } = responseMessage
-      log(`[AgentExecutor] 📝 Step ${step}: LLM returned message: ${content}`)
 
       if (content) {
-        log(`[AgentExecutor] ✅ Step ${step}: LLM returned final content. Task completed.`);
+        log(`[AgentExecutor] ✅ Step ${step}: LLM returned final content.Task completed.`);
         const finalDuration = Date.now() - stats.duration;
         updateStats({ duration: finalDuration, status: 'completed' });
         if (outputSchema) {
           try {
             const data = jsonSafeParse(content);
             if (!data) {
-              error(`[AgentExecutor] ❌ Step ${step}: Final output is not a valid JSON object:`, content)
+              error(`[AgentExecutor] ❌ Step ${step}: Final output is not a valid JSON object: ${content} `)
               throw new Error("Final output is not a valid JSON object")
             }
             const validated = outputSchema.safeParse(data);
@@ -429,7 +438,7 @@ export function createAgent({
             event.emit(AgentEvent.Completed, { content: validated.data, stats: { ...stats } });
             return validated.data
           } catch (e) {
-            error(`[AgentExecutor] ❌ Step ${step}: Final output extraction failed:`, content)
+            error(`[AgentExecutor] ❌ Step ${step}: Final output extraction failed: ${content} `)
             throw new Error("Final output extraction failed")
           }
         }
@@ -464,7 +473,7 @@ export function createAgent({
               llmConfig,
             });
           } catch (persistError) {
-            warn(`[AgentExecutor] ⚠️ Failed to persist messages after tool calls: `, persistError);
+            warn(`[AgentExecutor] ⚠️ Failed to persist messages after tool call ${persistError}`);
           }
         }
 
@@ -504,6 +513,7 @@ export function createAgent({
     inputSchema,
     toString,
     memory,
+    logger,
     addTool: (tool: Tool<z.ZodObject<any>, z.ZodTypeAny>) => {
       tools.push(tool);
       validateTools();
@@ -515,7 +525,7 @@ export function createAgent({
     getStats: () => stats,
     asTool: () =>
       defineTool({
-        name: normailizeName(name),
+        name: normalizeName(name),
         description: instructions + (description ?? ""),
         validators: {
           args: inputSchema ?? z.object({ prompt: z.string() }),
@@ -537,3 +547,4 @@ export function createAgent({
   };
 }
 
+export type Agent = ReturnType<typeof createAgent>

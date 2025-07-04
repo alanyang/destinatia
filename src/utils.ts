@@ -62,6 +62,6 @@ export function jsonSafeParse(text: string) {
   return null;
 }
 
-export function normailizeName(name: string) {
+export function normalizeName(name: string) {
   return name.toLowerCase().replace(/\s+/g, "_")
 }

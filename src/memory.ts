@@ -1,5 +1,8 @@
 import { ChatCompletionMessageParam } from "openai/resources/index";
 import { Context } from "./tool";
+import pino from "pino";
+import { createLogger } from "./logger";
+import { EventEmitter } from "node:stream";
 
 export type CompressFunc<T extends ChatCompletionMessageParam = ChatCompletionMessageParam> = (
   messages: T[],
@@ -62,11 +65,16 @@ export function slideWindowCompression<
   return compressed;
 }
 
+export type MemoryEvent =
+  "reset" | "change" | "init"
+
 
 type MemoryArgs = {
   name: string
   systemMessage: string
-  maxHistory?: number;
+  maxHistory?: number
+  logger?: pino.Logger
+  event?: EventEmitter
 }
 export class Memory<
   T extends ChatCompletionMessageParam = ChatCompletionMessageParam
@@ -80,15 +88,20 @@ export class Memory<
 
   maxHistory: number = this.defaultMaxHistory;
 
-  constructor({ name, systemMessage, maxHistory }: MemoryArgs) {
+  private event: EventEmitter
+
+  constructor({ name, systemMessage, maxHistory, event }: MemoryArgs) {
     this.name = name
     this.instructions = systemMessage
+    this.event = event ?? new EventEmitter()
     this.maxHistory = maxHistory ?? this.defaultMaxHistory;
     const system = {
       role: "system" as const,
       content: systemMessage
     } as T
     this.memories = [system]
+    this.event.emit("init")
+    this.event.emit("change")
   }
 
   get messages(): T[] {
@@ -102,6 +115,14 @@ export class Memory<
   get systemMessage(): string {
     const m = this.memories.find(m => m.role === "system")?.content ?? "";
     return m as string
+  }
+
+  on(event: MemoryEvent, listener: (...args: any[]) => void) {
+    this.event.on(event, listener)
+  }
+
+  off(event: MemoryEvent, listener: (...args: any[]) => void) {
+    this.event.off(event, listener)
   }
 
   replaceSystemMessage(message: string) {
@@ -122,6 +143,7 @@ export class Memory<
         ...(messages ?? [])
       ]
     }
+    this.event.emit("change")
   }
 
 
@@ -129,10 +151,13 @@ export class Memory<
     if (messages.every(m => m.role)) {
       this.memories.push(...messages);
     }
+    this.event.emit("change")
   }
 
   reset() {
     this.memories = [];
+    this.event.emit("reset")
+    this.event.emit("change")
   }
 
   toString() {
@@ -183,6 +208,7 @@ ${JSON.stringify(ctx, null, 2)}
       [newSystemMessage, ...messages] :
       [newSystemMessage, ...fromMessages, ...messages]
     this.memories = memories
+    this.event.emit("change")
   }
 
   arrange(
@@ -195,6 +221,9 @@ ${JSON.stringify(ctx, null, 2)}
       } else {
         effectiveMessages = slideWindowCompression(effectiveMessages, { windowSize: this.maxHistory });
       }
+    }
+    if (effectiveMessages.length !== this.memories.length) {
+      this.event.emit("change")
     }
     this.memories = [...effectiveMessages]
     return effectiveMessages;

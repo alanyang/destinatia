@@ -1,11 +1,5 @@
 export * from "./tool"
-import { z } from "zod"
+export * from "./agent"
+export * from "./memory"
+export * from "./council"
 
-function a(param: z.ZodTypeAny[]) {
-}
-
-const validators = [z.string(), z.number(), z.boolean(), z.object({
-  name: z.string(),
-})]
-
-a(validators)

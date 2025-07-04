@@ -51,10 +51,10 @@ const triageAgent = createAgent({
 
 
 (async () => {
-  console.log(await triageAgent.run({ input: "你好!你是谁？都会什么" }))
-  console.log(await triageAgent.run({ input: "こんにちは!私は誰ですか？何をしますか？" }))
-  console.log(await triageAgent.run({ input: "Hello! Who are you? What do you do?" }))
-  console.log(await triageAgent.run({ input: "¡Hola! ¿Quién eres? ¿A qué te dedicas?" }))
+  triageAgent.logger.debug(await triageAgent.run({ input: "你好!你是谁？都会什么" }))
+  triageAgent.logger.debug(await triageAgent.run({ input: "こんにちは!私は誰ですか？何をしますか？" }))
+  triageAgent.logger.debug(await triageAgent.run({ input: "Hello! Who are you? What do you do?" }))
+  triageAgent.logger.debug(await triageAgent.run({ input: "¡Hola! ¿Quién eres? ¿A qué te dedicas?" }))
 })()
   .finally(process.exit)
 

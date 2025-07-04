@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { zodToJsonSchema } from "zod-to-json-schema"
-import { normailizeName } from "./utils";
+import { normalizeName } from "./utils";
 
 export type Context = Record<string, unknown>;
 export type ToolMiddleware =
@@ -50,5 +50,5 @@ export function defineTool<
   };
 }): Tool<P, R> {
   const { name } = config
-  return { ...config, name: normailizeName(name) }
+  return { ...config, name: normalizeName(name) }
 }

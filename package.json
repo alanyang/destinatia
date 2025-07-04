@@ -5,8 +5,11 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "jest",
-    "start": "tsx src/main.ts"
+    "test": "jest --verbose",
+    "start": "tsx src/main.ts",
+    "run:handoff": "tsx examples/handoff.ts | pino-pretty",
+    "run:news": "tsx examples/news.ts | pino-pretty",
+    "run:trip": "tsx examples/trip.ts | pino-pretty"
   },
   "keywords": [
     "AI",
@@ -20,6 +23,7 @@
   "types": "dist/index.d.ts",
   "dependencies": {
     "openai": "^5.8.2",
+    "pino": "^9.7.0",
     "reflect-metadata": "^0.2.2",
     "uuid": "^11.1.0",
     "zod": "^3.25.67",
@@ -29,12 +33,13 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.8",
     "jest": "^30.0.4",
+    "pino-pretty": "^13.0.0",
     "ts-jest": "^29.4.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=20.0.0"
   },
   "files": [
     "dist",
