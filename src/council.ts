@@ -1,6 +1,5 @@
 import z from "zod";
 import { createAgent, Agent } from "./agent";
-import zodToJsonSchema from "zod-to-json-schema";
 import pino from "pino";
 import { createLogger } from "./logger";
 

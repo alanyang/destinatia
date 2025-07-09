@@ -2,7 +2,6 @@ import OpenAI from "openai";
 import events from "node:events";
 import { z } from "zod";
 import { v4 as uuid } from "uuid"
-import { ChatCompletionMessageParam } from "openai/resources/index.mjs";
 import { Tool, Context, toolModelSchema, defineTool } from "./tool";
 
 import zodToJsonSchema from "zod-to-json-schema";
